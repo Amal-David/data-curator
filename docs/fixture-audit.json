@@ -1,0 +1,106 @@
+{
+  "curated_records": 13,
+  "expected_rejections": {
+    "garden-contaminated": "holdout_overlap",
+    "garden-junk": "low_quality",
+    "garden-short": "character_length",
+    "notes-duplicate": "exact_duplicate"
+  },
+  "inputs": [
+    {
+      "dataset_id": "fixture-00",
+      "license": "MIT",
+      "records": 8,
+      "records_sha256": "a862c2e8ee231aef7840c06633bd944c9fbe718d526209301ceb0913b3e7ff33",
+      "role": "source",
+      "upload_sha256": "fba932bfb1cc0c99d329fca38e54137fc658c998148cdae1914ee1eab1f12664"
+    },
+    {
+      "dataset_id": "fixture-01",
+      "license": "MIT",
+      "records": 5,
+      "records_sha256": "9c3e4cfe4e998106b0ca05f9c96e4fe3d3abb33da62396982a7ec3e910c17806",
+      "role": "source",
+      "upload_sha256": "cde67d68abf728bff523f428f0d5cd73694b9ba46d7c13cdabb0c495c20a69cd"
+    },
+    {
+      "dataset_id": "fixture-02",
+      "license": "MIT",
+      "records": 4,
+      "records_sha256": "6ae130e4bf7643a809928433611d96e33ad42b5cc227566761510da99f240ca2",
+      "role": "source",
+      "upload_sha256": "86641db2f8086edbaaa78c9730045720cf37f45dfffb8d713b9a83f6b9275cc8"
+    },
+    {
+      "dataset_id": "fixture-03",
+      "license": "MIT",
+      "records": 2,
+      "records_sha256": "232bcb185dd6a9763a4f22a5958beeec49d918acc8034002b5c78d92b541680e",
+      "role": "target",
+      "upload_sha256": "abbd360d7826d7d2f1ceb17b1a1d7c3f11d7bd4f93566d3b181f5df78bd07978"
+    },
+    {
+      "dataset_id": "fixture-04",
+      "license": "MIT",
+      "records": 1,
+      "records_sha256": "cc06074c6133526d7f1ce3143357f112b722dd9c677719a95cdbcc54734b57f8",
+      "role": "holdout",
+      "upload_sha256": "bcb7091ca144f3c1748e6f1897c9ac7edd8560325e86381aafdf14db3bcb269a"
+    }
+  ],
+  "observed_rejections": {
+    "garden-contaminated": "holdout_overlap",
+    "garden-junk": "low_quality",
+    "garden-short": "character_length",
+    "notes-duplicate": "exact_duplicate"
+  },
+  "output_sha256": "bda8f0cf1fbfbf14ff9b89c4b9fe3652e2a95139fc302d92d9ad3f97c752048b",
+  "planted_rejection_precision": 1.0,
+  "planted_rejection_recall": 1.0,
+  "protected_examples_kept": [
+    "CJK",
+    "math",
+    "code case and indentation",
+    "inert HTML text"
+  ],
+  "recipe": {
+    "calibrate": {
+      "quality_min": 0.35,
+      "relevance_min": 0.0,
+      "task": ""
+    },
+    "clean": {
+      "dedup_threshold": 0.9,
+      "holdout_ngram": 8,
+      "holdout_overlap": 0.2,
+      "max_chars": 200000,
+      "min_chars": 24
+    },
+    "compose": {
+      "max_records": 1000,
+      "weights": {}
+    },
+    "create": {
+      "enabled": false,
+      "endpoint": "http://127.0.0.1:11434/v1",
+      "max_output_tokens": 1024,
+      "max_records": 10,
+      "model": "",
+      "retries": 1,
+      "temperature": 0.0,
+      "timeout_seconds": 30
+    },
+    "name": "Local curation recipe",
+    "seed": 42
+  },
+  "repeat_output_byte_identical": true,
+  "scope": "Original tiny planted fixtures; no model, network, training or scale claim",
+  "single_run_seconds": 0.00438,
+  "source_records": 17,
+  "timing_environment": {
+    "architecture": "arm64",
+    "os": "Darwin",
+    "python": "3.13.11"
+  },
+  "token_count_method": "ceil(UTF-8 bytes / 4), estimate; not a model tokenizer"
+}
