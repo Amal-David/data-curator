@@ -43,6 +43,12 @@ def main() -> None:
     output = export_jsonl(result["records"])
     assert output == export_jsonl(repeat["records"]), "Repeated output bytes differ"
     assert hashlib.sha256(output).hexdigest() == result["manifest"]["output_sha256"]
+    repeat_artifacts = {}
+    for key in ("records", "rejected_records", "decisions", "generated_records"):
+        repeat_artifacts[key] = export_jsonl(result[key]) == export_jsonl(repeat[key])
+    for key in ("summary", "manifest"):
+        repeat_artifacts[key] = json.dumps(result[key], sort_keys=True) == json.dumps(repeat[key], sort_keys=True)
+    assert all(repeat_artifacts.values()), "A repeated deterministic artifact differs"
     rejected = {
         record["metadata"].get("input_id"): record["rejection"]["reason"]
         for record in result["rejected_records"]
@@ -70,6 +76,9 @@ def main() -> None:
         "planted_rejection_recall": 1.0,
         "protected_examples_kept": ["CJK", "math", "code case and indentation", "inert HTML text"],
         "repeat_output_byte_identical": True,
+        "repeat_artifacts_identical": repeat_artifacts,
+        "engine": result["manifest"]["engine"],
+        "stage_hashes": result["manifest"]["stage_hashes"],
         "output_sha256": result["manifest"]["output_sha256"],
         "token_count_method": result["manifest"]["token_count_method"],
         "single_run_seconds": round(elapsed, 6),

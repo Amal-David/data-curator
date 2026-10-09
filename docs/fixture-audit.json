@@ -1,5 +1,9 @@
 {
   "curated_records": 13,
+  "engine": {
+    "name": "data-curator",
+    "version": "1.0.1"
+  },
   "expected_rejections": {
     "garden-contaminated": "holdout_overlap",
     "garden-junk": "low_quality",
@@ -93,14 +97,48 @@
     "name": "Local curation recipe",
     "seed": 42
   },
+  "repeat_artifacts_identical": {
+    "decisions": true,
+    "generated_records": true,
+    "manifest": true,
+    "records": true,
+    "rejected_records": true,
+    "summary": true
+  },
   "repeat_output_byte_identical": true,
   "scope": "Original tiny planted fixtures; no model, network, training or scale claim",
-  "single_run_seconds": 0.00438,
+  "single_run_seconds": 0.006796,
   "source_records": 17,
+  "stage_hashes": [
+    {
+      "config_sha256": "e0ad4f1e69dae7babd84688c4f6debdb89750a93eb98cd9c114205b2e59b67ad",
+      "input_sha256": "a94a5ecc1ccecbe1090dac20cab41ee1814a8d0b198d216ef736734bf633ed39",
+      "output_sha256": "d9ec46aa433d93fc35304d5b7afa182d0da2106286b3c5b97c78a779e9cc1393",
+      "stage": "clean"
+    },
+    {
+      "config_sha256": "6378c4b88527f531c14bd9f30e42c3fe319b57145352daff1c24d856c5efa87c",
+      "input_sha256": "fd90a31b7d0d6f92f619464fcbcea93bff80a98f250b097523e897dde7ceec56",
+      "output_sha256": "dc853827af51cfd82098cab472dfb680c3a442a43b1661812c0193ba70985afe",
+      "stage": "calibrate"
+    },
+    {
+      "config_sha256": "6ba936e27e04eb0995d65dff94d1cea22abb4686d256f44712d6c0a0c8088046",
+      "input_sha256": "d6bac751e183b45ccb09e2245ab22909de3c3a4c6fe4c4cac6ff87329c015cf8",
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stage": "create"
+    },
+    {
+      "config_sha256": "367d72a14f3d63e2aed3895b0bb11965852cc95e6e2df4ffb632040d5717d4e4",
+      "input_sha256": "c994bb09865ee2a5134d494a8ca0b1b2ae5712919f0da2c3710293a269d3bba1",
+      "output_sha256": "bda8f0cf1fbfbf14ff9b89c4b9fe3652e2a95139fc302d92d9ad3f97c752048b",
+      "stage": "compose"
+    }
+  ],
   "timing_environment": {
-    "architecture": "arm64",
-    "os": "Darwin",
-    "python": "3.13.11"
+    "architecture": "x86_64",
+    "os": "Linux",
+    "python": "3.12.14"
   },
   "token_count_method": "ceil(UTF-8 bytes / 4), estimate; not a model tokenizer"
 }

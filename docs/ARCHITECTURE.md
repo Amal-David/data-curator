@@ -73,6 +73,12 @@ bytes, in which case that file is absent. Parsed records are checksum-verified o
 load. The application does not edit imported datasets in place. A referenced
 dataset cannot be deleted while a persisted run depends on it.
 
+Completed artifacts are also verified when read. New runs store each artifact's
+byte length and SHA-256 in SQLite; older runs can use the existing manifest and
+persisted recipe/summary hashes. Missing or changed files produce an explicit
+integrity conflict instead of silently returning modified data. This detects
+damage, not an attacker who can rewrite both files and the local database.
+
 ## Run lifecycle
 
 A run transitions from `queued` to `running`, then to `completed`, `cancelled`, or
@@ -89,7 +95,9 @@ Cancellation does not modify originals. Retry creates a new run identity.
 Artifact writes use temporary files and atomic replacements. Completed run
 artifacts are installed from a temporary directory before the completed status is
 published. On reopening a workspace, unfinished runs without an active worker
-lease are marked failed/interrupted and can be retried. This is recoverable local
+lease are marked failed/interrupted and can be retried. A new run or retry also
+recovers a worker that died after the workspace was opened, under the same lease.
+Failure to start a worker becomes a failed, retryable run. This is recoverable local
 job persistence, not distributed scheduling or checkpoint continuation.
 
 ## HTTP examples

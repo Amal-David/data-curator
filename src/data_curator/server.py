@@ -56,9 +56,17 @@ class Handler(BaseHTTPRequestHandler):
         return
 
     def _trusted_authority(self, value: str, *, origin: bool = False) -> bool:
+        # urlsplit strips some controls and accepts empty userinfo. Reject those
+        # spellings before parsing rather than trusting their normalized host.
+        if not value or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value):
+            return False
         try:
             parsed = urlsplit(value if origin else "//" + value)
-            if parsed.username or parsed.password or parsed.hostname not in LOOPBACK_NAMES:
+            if (
+                parsed.username is not None
+                or parsed.password is not None
+                or parsed.hostname not in LOOPBACK_NAMES
+            ):
                 return False
             if origin and (
                 parsed.scheme not in {"http", "https"} or parsed.path or parsed.query or parsed.fragment
@@ -66,7 +74,7 @@ class Handler(BaseHTTPRequestHandler):
                 return False
             if not origin and (parsed.path or parsed.query or parsed.fragment):
                 return False
-            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            port = parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80)
             valid_ports = {self.server.server_port, 5173} if origin else {self.server.server_port}
             return port in valid_ports
         except ValueError:

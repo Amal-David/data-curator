@@ -58,7 +58,9 @@ def _reject_constant(value: str) -> None:
 def _json(text: str, location: str) -> Any:
     try:
         return json.loads(text, parse_constant=_reject_constant)
-    except (json.JSONDecodeError, RecursionError) as exc:
+    except ValidationError:
+        raise
+    except (ValueError, RecursionError) as exc:
         raise ValidationError(f"{location}: invalid JSON ({str(exc)[:160]})") from exc
 
 

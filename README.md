@@ -198,7 +198,9 @@ This is an inspectable local application, not a distributed curation platform or
 production multiuser service. Heuristic scores are review aids, lexical overlap
 does not detect every semantic leak, and no training-quality or compute-efficiency
 improvement has been established. Read the [security model](docs/SECURITY.md) and
-[reference notes](docs/REFERENCE_NOTES.md).
+[reference notes](docs/REFERENCE_NOTES.md). The [capability map](docs/CAPABILITIES.md)
+separates working functionality, advanced gaps, and the validation needed for
+stronger quality or scale claims.
 
 Original code and fixtures are [MIT licensed](LICENSE). Dependencies retain their
 own licenses; see [third-party notices](THIRD_PARTY_NOTICES.md). Imported datasets

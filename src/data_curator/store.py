@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import tempfile
 import threading
 import time
@@ -57,6 +58,24 @@ def _atomic_write(path: Path, content: bytes) -> None:
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def _read_immutable(path: Path, digest: str, *, label: str, maximum: int | None = None) -> bytes:
+    """Fail closed on missing, damaged, oversized, or non-regular stored files."""
+    try:
+        # Nonblocking open avoids hanging if a stored file was replaced by a FIFO.
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or (maximum is not None and info.st_size > maximum):
+                raise ConflictError(f"Immutable {label} integrity check failed; restore original data")
+            content = stream.read() if maximum is None else stream.read(maximum + 1)
+    except OSError as exc:
+        raise ConflictError(f"Immutable {label} is missing or unreadable; restore original data") from exc
+    if (maximum is not None and len(content) > maximum) or hashlib.sha256(content).hexdigest() != digest:
+        raise ConflictError(f"Immutable {label} checksum mismatch; restore original data")
+    return content
 
 
 def _acquire_run_lock(path: Path):
@@ -122,22 +141,26 @@ class Store:
         lease = _acquire_run_lock(self.root / "worker.lock")
         if lease is not None:
             try:
-                with self._connect() as connection:
-                    for row in connection.execute(
-                        "SELECT payload FROM runs WHERE status IN ('queued','running')"
-                    ).fetchall():
-                        run = json.loads(row[0])
-                        run.update(
-                            status="failed",
-                            error="Run interrupted before completion. Retry to create a fresh run.",
-                        )
-                        run["progress"]["message"] = "Interrupted; retry available"
-                        connection.execute(
-                            "UPDATE runs SET status=?,payload=? WHERE id=?",
-                            (run["status"], _json(run), run["id"]),
-                        )
+                self._recover_interrupted_runs()
             finally:
                 lease.close()
+
+    def _recover_interrupted_runs(self) -> None:
+        """The caller must hold worker.lock, proving no live worker owns these rows."""
+        with self._connect() as connection:
+            for row in connection.execute(
+                "SELECT payload FROM runs WHERE status IN ('queued','running')"
+            ).fetchall():
+                run = json.loads(row[0])
+                run.update(
+                    status="failed",
+                    error="Run interrupted before completion. Retry to create a fresh run.",
+                )
+                run["progress"].update(stage="failed", message="Interrupted; retry available")
+                connection.execute(
+                    "UPDATE runs SET status=?,payload=? WHERE id=?",
+                    (run["status"], _json(run), run["id"]),
+                )
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -241,11 +264,7 @@ class Store:
     def get_dataset(self, identifier: str) -> dict[str, Any]:
         dataset = self._dataset_metadata(identifier)
         path = self.root / "datasets" / identifier / "records.jsonl"
-        if path.stat().st_size > 40 * 1024 * 1024:
-            raise ConflictError("Immutable dataset exceeds its storage limit; restore original data")
-        raw = path.read_bytes()
-        if hashlib.sha256(raw).hexdigest() != dataset["records_sha256"]:
-            raise ConflictError("Immutable dataset checksum mismatch; restore original data before running")
+        raw = _read_immutable(path, dataset["records_sha256"], label="dataset", maximum=40 * 1024 * 1024)
         dataset["records"] = [json.loads(line) for line in raw.splitlines() if line]
         return dataset
 
@@ -306,6 +325,9 @@ class Store:
             if lease is None:
                 raise ConflictError("Another run is active in this data directory")
             try:
+                # Another process can die after this Store was opened. Recover
+                # under the newly acquired lease, not only during initialization.
+                self._recover_interrupted_runs()
                 metadata = [self._dataset_metadata(identifier) for identifier in dataset_ids]
                 if not any(dataset["role"] == "source" for dataset in metadata):
                     raise ValidationError("At least one source dataset is required")
@@ -338,6 +360,9 @@ class Store:
                     "manifest": None,
                     "error": None,
                 }
+                # Prepare the independent caller response before any worker is
+                # launched, so even a copy failure cannot release a live lease.
+                response = copy.deepcopy(run)
                 with self._connect() as connection:
                     connection.execute("INSERT INTO runs VALUES (?,?,?)", (identifier, "queued", _json(run)))
                     for dataset_id in dataset_ids:
@@ -350,12 +375,30 @@ class Store:
                     daemon=True,
                     name=f"curator-{identifier[:8]}",
                 )
-                self._worker.start()
-                return run
+                try:
+                    self._worker.start()
+                except BaseException:
+                    self._worker = None
+                    self._active_id = None
+                    self._update_run(
+                        identifier,
+                        status="failed",
+                        error="Local worker could not start. Retry to create a fresh run.",
+                        progress={
+                            "stage": "failed",
+                            "completed": 0,
+                            "total": 0,
+                            "message": "Worker did not start; retry available",
+                        },
+                    )
+                    raise
+                # The worker must not share its recipe with a caller that can
+                # mutate this response after the persisted recipe was recorded.
+                return response
             except sqlite3.IntegrityError as exc:
                 lease.close()
                 raise ConflictError("Another run is active in this data directory") from exc
-            except Exception:
+            except BaseException:
                 lease.close()
                 raise
 
@@ -409,6 +452,10 @@ class Store:
                     status="completed",
                     summary=result["summary"],
                     manifest=result["manifest"],
+                    artifact_integrity={
+                        name: {"bytes": len(content), "sha256": hashlib.sha256(content).hexdigest()}
+                        for name, content in artifacts.items()
+                    },
                     progress={
                         "stage": "completed",
                         "completed": len(result["records"]),
@@ -463,7 +510,15 @@ class Store:
     def retry_run(self, identifier: str) -> dict[str, Any]:
         run = self.get_run(identifier)
         if run["status"] in {"queued", "running"}:
-            raise ConflictError("Wait for the active run to finish or cancel it before retrying")
+            with self._lock:
+                lease = _acquire_run_lock(self.root / "worker.lock")
+                if lease is None:
+                    raise ConflictError("Wait for the active run to finish or cancel it before retrying")
+                try:
+                    self._recover_interrupted_runs()
+                finally:
+                    lease.close()
+                run = self.get_run(identifier)
         return self.start_run(run["dataset_ids"], run["recipe"])
 
     def get_artifact(self, identifier: str, name: str) -> bytes:
@@ -472,7 +527,30 @@ class Store:
             raise NotFoundError("Artifact not found")
         if run["status"] != "completed":
             raise ConflictError("Artifacts are available only for completed runs")
-        return (self.root / "runs" / identifier / name).read_bytes()
+        integrity = run.get("artifact_integrity", {}).get(name)
+        maximum = None
+        if integrity is not None:
+            digest, maximum = integrity["sha256"], integrity["bytes"]
+        elif name in {"manifest.json", "recipe.json", "report.json"}:
+            # Existing workspaces already retain these canonical values in SQLite.
+            key = {"manifest.json": "manifest", "recipe.json": "recipe", "report.json": "summary"}[name]
+            content = (_json(run[key]) + "\n").encode("utf-8")
+            digest, maximum = hashlib.sha256(content).hexdigest(), len(content)
+        else:
+            key = {
+                "curated.jsonl": "output_sha256",
+                "rejected.jsonl": "rejected_sha256",
+                "decisions.jsonl": "decisions_sha256",
+                "generated.jsonl": "generated_candidates_sha256",
+            }[name]
+            digest = run["manifest"].get(key)
+            if not digest:
+                raise ConflictError(
+                    "Immutable artifact integrity is unavailable; retry to create a fresh run"
+                )
+        return _read_immutable(
+            self.root / "runs" / identifier / name, digest, label="artifact", maximum=maximum
+        )
 
     def get_run_records(self, identifier: str) -> list[dict[str, Any]]:
         return [
@@ -505,9 +583,10 @@ class Store:
             ]
 
     def close(self) -> None:
-        self._closed = True
-        self._cancel.set()
-        worker = self._worker
+        with self._lock:
+            self._closed = True
+            self._cancel.set()
+            worker = self._worker
         if worker is not None and worker is not threading.current_thread():
             worker.join(timeout=5)
 

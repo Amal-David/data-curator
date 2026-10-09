@@ -99,7 +99,7 @@ def _number(config: dict[str, Any], name: str, default: float, low: float, high:
     if (
         isinstance(value, bool)
         or not isinstance(value, (int, float))
-        or not math.isfinite(value)
+        or (isinstance(value, float) and not math.isfinite(value))
         or not low <= value <= high
     ):
         raise GenerationError(f"{name} must be a finite number between {low} and {high}.")
@@ -158,7 +158,7 @@ def _request(
                 raise GenerationError("Local model response exceeds the 1 MiB limit.")
             try:
                 document = json.loads(body.decode("utf-8"), parse_constant=_reject_constant)
-            except (UnicodeError, ValueError) as exc:
+            except (UnicodeError, ValueError, RecursionError) as exc:
                 raise GenerationError("Local model returned invalid UTF-8 JSON.") from exc
             if not isinstance(document, dict):
                 raise GenerationError("Local model response must be a JSON object.")
@@ -273,12 +273,17 @@ def generate_records(
         generated = message.get("content")
         if not isinstance(generated, str) or not generated.strip() or len(generated) > MAX_TEXT_CHARS:
             raise GenerationError("Local model returned empty, invalid, or oversized generated text.")
-        if choice.get("finish_reason") in ("length", "content_filter", "tool_calls", "function_call"):
-            raise GenerationError(f"Local model did not complete the document ({choice['finish_reason']}).")
-        if message.get("tool_calls") or message.get("refusal"):
+        if choice.get("finish_reason") != "stop":
+            raise GenerationError(
+                f"Local model did not complete the document ({choice.get('finish_reason')})."
+            )
+        if message.get("tool_calls") or message.get("function_call") or message.get("refusal"):
             raise GenerationError("Local model returned a tool call or refusal instead of a document.")
         _check_cancel(cancel)
-        output_hash = hashlib.sha256(generated.encode("utf-8")).hexdigest()
+        try:
+            output_hash = hashlib.sha256(generated.encode("utf-8")).hexdigest()
+        except UnicodeEncodeError as exc:
+            raise GenerationError("Local model returned invalid Unicode text.") from exc
         parent_id = record["id"]
         source_id = record.get("source_record_id", parent_id)
         dataset_id = record.get("dataset_id", "")

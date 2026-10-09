@@ -14,7 +14,13 @@ dataset roles. The [official Curation Studio launch page](https://www.datologyai
 is the product reference supplied for that brief. These stage names describe the
 workflow; they do not imply access to the vendor's underlying implementation.
 
-Two accessible primary sources informed the boundaries of this project:
+The launch article describes a guided four-stage workflow, role-separated data,
+task calibration, source-grounded generation, and configurable composition. It
+also describes enterprise infrastructure and proprietary research that this
+local implementation does not reproduce. See the [capability map](CAPABILITIES.md)
+for the implemented boundary and explicit gaps.
+
+Two further primary sources informed the boundaries of this project:
 
 - [BeyondWeb: Lessons from Scaling Synthetic Data for Trillion-scale Pretraining](https://www.datologyai.com/blog/beyondweb)
   discusses source-grounded synthetic rephrasing and reports experiments conducted
@@ -52,10 +58,14 @@ Four user-supplied Library image references were requested for local inspection:
 | `IMG_5183.png` | Dataset comparison |
 | `IMG_5182.png` | Launch |
 
-On 2026-10-09, the current Library materialization helper failed for each file
-with HTTP 403 after one bounded supported retry. No image bytes were available
-locally, and no pixel inspection was possible. The launch article also could not
-be opened by the research browser on that date. Neither limitation was bypassed.
-The visual design is therefore original and based on the functional brief, rather
-than a claimed reproduction of those screenshots. Reference image files are not
-committed to this repository.
+Initial inspection on a separate machine was blocked by HTTP 403. During the
+independent Linux VM review on 2026-10-09, all four already-available image files
+were opened and their pixels inspected. They show launch messaging, benchmark
+claims, small summary illustrations, and the four-stage workflow, rather than a
+complete interface specification. The official launch article was also retrieved
+and reviewed during that pass.
+
+The interface remains an original design. The supplied images establish the
+requested workflow, not implementation details or evidence that this project
+achieves any vendor result. Reference image files are not committed to this
+repository.

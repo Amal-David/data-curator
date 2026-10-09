@@ -82,6 +82,11 @@ generated text may contain sensitive material. Deleting or sharing only a curate
 export does not remove or share the entire workspace. The repository ignores local
 workspace data; verify your own paths before committing files or publishing
 artifacts. Hashes provide integrity checks, not encryption or anonymization.
+Dataset reads and completed-artifact downloads check stored hashes and reject
+missing, modified, or non-regular files. These checks cannot protect against a
+local actor who controls the workspace database and files. CLI export rejects
+destinations inside managed dataset/run directories and protects existing files
+unless overwrite was explicitly requested.
 
 Declared dataset licenses are provenance fields supplied by the importer. They do
 not grant rights, prove attribution completeness, or change third-party model and

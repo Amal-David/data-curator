@@ -17,7 +17,7 @@ from collections import Counter, defaultdict
 from collections.abc import Callable
 from typing import Any
 
-ENGINE_VERSION = "1.0.0"
+ENGINE_VERSION = "1.0.1"
 MAX_RECORDS = 50_000
 MAX_CHARACTERS = 20_000_000
 _MAX_CANDIDATES = 256
@@ -32,6 +32,15 @@ _MINHASH_COEFFICIENTS = tuple(
     )
     for i in range(32)
 )
+# Include supplementary Han/Kana and decomposed/compatibility Hangul, rather
+# than treating non-BMP ideographs as a single word in held-out screening.
+_EAST_ASIAN_UNITS = (
+    r"\u1100-\u11ff\u3007\u3040-\u30ff\u3130-\u318f\u31f0-\u31ff"
+    r"\u3400-\u4dbf\u4e00-\u9fff\ua960-\ua97f\uac00-\ud7ff\uf900-\ufaff"
+    r"\uff66-\uff9f\uffa0-\uffdc\U0001aff0-\U0001afff\U0001b000-\U0001b16f"
+    r"\U00020000-\U0002ffff\U00030000-\U000323af"
+)
+_TOKEN_PATTERN = re.compile(rf"[{_EAST_ASIAN_UNITS}]|[^\W_{_EAST_ASIAN_UNITS}]+|[^\w\s]|_")
 
 
 class CancelledError(Exception):
@@ -167,11 +176,7 @@ def _tokens(text: str, *, folded: bool = False) -> list[str]:
     text = unicodedata.normalize("NFC", text)
     if folded:
         text = text.casefold()
-    return re.findall(
-        r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]|[^\W_\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]+|[^\w\s]|_",
-        text,
-        re.UNICODE,
-    )
+    return _TOKEN_PATTERN.findall(text)
 
 
 def estimated_tokens(text: str) -> int:
@@ -469,7 +474,9 @@ def _prepare(
             derived = copy.deepcopy(record)
             derived.update(
                 {
-                    "id": f"{dataset_id}:{record['id']}",
+                    "id": ":".join(
+                        value.replace("%", "%25").replace(":", "%3A") for value in (dataset_id, record["id"])
+                    ),
                     "dataset_id": dataset_id,
                     "source_record_id": record["id"],
                     "kind": kind,
@@ -527,6 +534,17 @@ def run_pipeline(
     decisions: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
     stages: list[dict[str, Any]] = []
+    stage_hashes: list[dict[str, str]] = []
+
+    def begin_stage(stage: str, inputs: dict[str, Any], stage_config: dict[str, Any]) -> dict[str, str]:
+        # Hash now: later calibration adds scores to the same derived records.
+        snapshot = {
+            "stage": stage,
+            "input_sha256": _sha(_canonical(inputs)),
+            "config_sha256": _sha(_canonical(stage_config)),
+        }
+        stage_hashes.append(snapshot)
+        return snapshot
 
     def report(stage: str, completed: int, total: int, message: str) -> None:
         _check(cancel)
@@ -551,6 +569,7 @@ def run_pipeline(
             )
 
     clean_config = config["clean"]
+    clean_hashes = begin_stage("clean", {"sources": sources, "holdouts": holdouts}, clean_config)
     report("clean", 0, len(sources), "Indexing held-out references and checking source records")
     holdout_index = _HoldoutIndex(
         holdouts, clean_config["holdout_ngram"], clean_config["holdout_overlap"], cancel
@@ -605,6 +624,7 @@ def run_pipeline(
             decision(record, "clean", "keep", "passed_cleaning")
         if index % 32 == 0 or index + 1 == len(sources):
             report("clean", index + 1, len(sources), "Checking exact/near duplicates and held-out overlap")
+    clean_hashes["output_sha256"] = _sha(export_jsonl(cleaned))
     stages.append(
         {
             "stage": "clean",
@@ -612,6 +632,9 @@ def run_pipeline(
             "output": len(cleaned),
             "description": "Length/control checks, code-safe exact hashes, verified text Jaccard and held-out n-grams",
         }
+    )
+    calibration_hashes = begin_stage(
+        "calibrate", {"sources": cleaned, "targets": targets}, config["calibrate"]
     )
     report("calibrate", 0, len(cleaned), "Fitting transparent TF-IDF relevance from sources and targets only")
     relevance = _Relevance(cleaned, targets, config["calibrate"]["task"], cancel)
@@ -642,6 +665,7 @@ def run_pipeline(
             calibrated.append(record)
         if index % 32 == 0 or index + 1 == len(cleaned):
             report("calibrate", index + 1, len(cleaned), "Scoring Unicode-aware quality and target relevance")
+    calibration_hashes["output_sha256"] = _sha(export_jsonl(calibrated))
     stages.append(
         {
             "stage": "calibrate",
@@ -652,6 +676,11 @@ def run_pipeline(
     )
     generated: list[dict[str, Any]] = []
     generated_candidates: list[dict[str, Any]] = []
+    creation_hashes = begin_stage(
+        "create",
+        {"sources": calibrated, "cleaned_sources": cleaned, "targets": targets, "holdouts": holdouts},
+        {"create": config["create"], "clean": clean_config, "calibrate": config["calibrate"]},
+    )
     skipped = []
     if not config["create"]["enabled"]:
         skipped.append({"stage": "create", "reason": "Generation disabled; no model was called"})
@@ -684,6 +713,7 @@ def run_pipeline(
                 not isinstance(record, dict)
                 or not isinstance(record.get("text"), str)
                 or not isinstance(record.get("id"), str)
+                or not record["id"]
             ):
                 raise ValueError("Local model adapter returned an invalid generated record")
             if record["id"] in seen_ids:
@@ -694,9 +724,26 @@ def run_pipeline(
             lineage = record.get("lineage", {})
             parent_ids = lineage.get("parent_ids", []) if isinstance(lineage, dict) else []
             # Generation adapters must preserve a source-grounded parent, not invent one.
-            if not parent_ids or not all(parent in parents for parent in parent_ids):
+            if (
+                not isinstance(parent_ids, list)
+                or len(parent_ids) != 1
+                or not isinstance(parent_ids[0], str)
+                or parent_ids[0] not in parents
+            ):
                 raise ValueError("Generated record must identify eligible source parent IDs")
+            parent = parents[parent_ids[0]]
+            if (
+                lineage.get("origin") != "synthetic"
+                or any(record.get(key) != parent[key] for key in ("dataset_id", "source_record_id", "kind"))
+                or lineage.get("source_dataset_id", parent["dataset_id"]) != parent["dataset_id"]
+                or lineage.get("source_record_id", parent["source_record_id"]) != parent["source_record_id"]
+            ):
+                raise ValueError("Generated record must preserve its source parent's identity and kind")
             record["content_sha256"] = _sha(record["text"].encode("utf-8"))
+            # Adapter copies can carry parent scores. A candidate rejected by
+            # cleaning has not been scored and must not inherit those values.
+            record.pop("quality_score", None)
+            record.pop("relevance_score", None)
             if screening(record, "create") and calibrate(record, "create"):
                 generated.append(record)
             report(
@@ -705,6 +752,7 @@ def run_pipeline(
                 len(generated_candidates),
                 "Re-screening generated text for contamination, duplicates and scores",
             )
+    creation_hashes["output_sha256"] = _sha(export_jsonl(generated))
     stages.append(
         {
             "stage": "create",
@@ -716,6 +764,11 @@ def run_pipeline(
         }
     )
     candidates = calibrated + generated
+    composition_hashes = begin_stage(
+        "compose",
+        {"records": candidates},
+        {"compose": config["compose"], "seed": config["seed"], "resolved_weights": weights},
+    )
     report("compose", 0, len(candidates), "Allocating a deterministic record budget without replacement")
     buckets: dict[str, list[dict[str, Any]]] = {key: [] for key in source_ids}
     for record in candidates:
@@ -745,6 +798,7 @@ def run_pipeline(
                     "zero_source_weight" if not weights[key] else "outside_record_budget",
                 )
     selected.sort(key=lambda record: (rank(record, "export_order"), record["id"]))
+    composition_hashes["output_sha256"] = _sha(export_jsonl(selected))
     stages.append(
         {
             "stage": "compose",
@@ -801,11 +855,13 @@ def run_pipeline(
         "generated_candidates_sha256": _sha(export_jsonl(generated_candidates)),
         "output_records": len(selected),
         "stage_counts": stages,
+        "stage_hashes": stage_hashes,
         "mixture": mixture,
         "shortage_records": summary["shortage_records"],
         "skipped_stages": skipped,
         "token_count_method": summary["token_count_method"],
         "algorithms": {
+            "stage_hashes": "entry-time canonical JSON input/config objects; exit-time canonical JSONL kept records v1",
             "exact_dedup": "sha256(kind + NUL + exact UTF-8); case and indentation preserved",
             "near_dedup": "text-only token 3-shingle Jaccard; deterministic MinHash32/LSH8x4; verify every candidate",
             "minhash_scheme": "sha256 token tuples, prime 2^61-1, sha256-derived affine coefficients v1, bottom8192",

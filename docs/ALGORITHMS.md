@@ -11,6 +11,8 @@ Original records are copied before derivation. Text bytes after UTF-8 decoding a
 preserved; code case, indentation, tabs, and line endings are not collapsed.
 Imports remove an optional UTF-8 byte-order mark, while the original upload remains
 available separately. Derived record IDs combine dataset and source-record identity.
+Percent signs and colons in each component are escaped before joining them with
+a colon, so distinct identity pairs cannot collide at the separator.
 
 The engine sorts sources by dataset ID and source-record ID before screening. The
 first retained duplicate representative wins in that order, including duplicates
@@ -18,7 +20,8 @@ across source datasets. Changing record or dataset identities can change which
 representative survives. Repeat runs against the same stored inputs are stable.
 
 Text feature extraction uses Unicode NFC normalization. CJK, Japanese, and Hangul
-characters become individual lexical units; other letter/number runs, punctuation,
+characters, including supplementary-plane Han and Kana, become individual lexical
+units; other letter/number runs, punctuation,
 symbols, and underscores remain tokens. Case folding is used for relevance and
 held-out overlap, but not near-duplicate features. Feature normalization never
 rewrites the record's exported text.
@@ -189,6 +192,27 @@ counts/fractions, and source shortages are recorded. Unselected records have
 Canonical JSON uses UTF-8, sorted keys, compact separators, and rejects non-finite
 numbers. Every JSONL record has a final newline; an empty export is zero bytes.
 SHA-256 checksums cover these exact bytes.
+
+`manifest.stage_hashes` contains ordered `clean`, `calibrate`, `create`, and
+`compose` entries, each with `input_sha256`, `config_sha256`, and `output_sha256`.
+Input/config hashes cover canonical JSON objects at stage entry; output hashes
+cover canonical JSONL kept records at stage exit. These snapshots are captured
+before later stages add scores or otherwise mutate derived records.
+
+| Stage | Input object | Configuration object | Output records |
+| --- | --- | --- | --- |
+| Clean | `{sources, holdouts}` | Clean settings | Kept, unscored sources |
+| Calibrate | `{sources: cleaned, targets}` | Calibrate settings | Kept, scored sources |
+| Create | `{sources: calibrated, cleaned_sources: cleaned, targets, holdouts}` | `{create, clean, calibrate}` | Generated candidates that pass re-screening |
+| Compose | `{records: calibrated + accepted generated}` | `{compose, seed, resolved_weights}` | Final selected records |
+
+Create's `cleaned_sources` snapshot contains all cleaned sources after scoring,
+including those excluded by calibration, because they contributed to the fitted
+relevance model and duplicate index. Reference records in these local hash inputs
+do not become model prompt material. Create output excludes rejected candidates;
+the separate `generated_candidates_sha256` covers every returned candidate.
+Disabled Create hashes empty output bytes. Scores are absent on a generated
+candidate until that candidate actually reaches calibration.
 
 The manifest includes schema/engine versions, seed, recipe hash, per-input roles
 and hashes, algorithm descriptions, stage counts, output/rejected/decision/generated

@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import time
@@ -129,12 +130,17 @@ def _demo(store: Any) -> list[dict[str, Any]]:
 
 
 def _export(store: Any, run_id: str, output: Path, overwrite: bool) -> dict[str, Any]:
+    destination = output.expanduser().resolve()
+    if any(destination.is_relative_to(store.root / name) for name in ("runs", "datasets")):
+        raise ValueError("Export destination cannot be inside managed workspace artifacts")
     # Read and validate all artifacts before writing anything to the destination.
     artifacts = {name: store.get_artifact(run_id, name) for name in ARTIFACTS}
     for name in ARTIFACTS:
         path = output / name
         if path.is_symlink() or (path.exists() and not overwrite):
             raise ValueError(f"Export would replace {path}. Choose another directory or use --overwrite.")
+        if path.exists() and not path.is_file():
+            raise ValueError(f"Export destination must be a regular file, not a directory or device: {path}")
     output.mkdir(parents=True, exist_ok=True)
     for name, content in artifacts.items():
         with tempfile.NamedTemporaryFile(dir=output, prefix=".export-", delete=False) as handle:
@@ -147,7 +153,12 @@ def _export(store: Any, run_id: str, output: Path, overwrite: bool) -> dict[str,
                 temporary.unlink(missing_ok=True)
                 raise
         try:
-            temporary.replace(output / name)
+            if overwrite:
+                temporary.replace(output / name)
+            else:
+                # Atomic no-clobber publication also protects files created by a
+                # concurrent export after the preflight check.
+                os.link(temporary, output / name)
         finally:
             temporary.unlink(missing_ok=True)
     return {
@@ -256,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             store.close()
         return 0
-    except (ValueError, OSError, LookupError, RuntimeError) as exc:
+    except (ValueError, OSError, LookupError, RuntimeError, sqlite3.Error) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 1
 
